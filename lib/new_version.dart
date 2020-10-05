@@ -4,10 +4,13 @@ import 'package:http/http.dart' as http;
 import 'package:package_info/package_info.dart';
 import 'package:html/parser.dart' show parse;
 import 'package:flutter/material.dart';
+import 'package:store_redirect/store_redirect.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/cupertino.dart';
 import 'dart:convert';
 import 'dart:async';
+
+import 'package:version/version.dart';
 
 /// Information about the app's current version, and the most recent version
 /// available in the Apple App Store or Google Play Store.
@@ -61,7 +64,10 @@ class NewVersion {
     VersionStatus versionStatus = VersionStatus(
       localVersion: packageInfo.version,
     );
-    switch (Theme.of(context).platform) {
+
+    TargetPlatform platform = Theme.of(context).platform;
+
+    switch (platform) {
       case TargetPlatform.android:
         final id = androidId ?? packageInfo.packageName;
         versionStatus = await _getAndroidStoreVersion(id, versionStatus);
@@ -76,8 +82,24 @@ class NewVersion {
     if (versionStatus == null) {
       return null;
     }
-    versionStatus.canUpdate =
-        versionStatus.storeVersion != versionStatus.localVersion;
+
+    final appStoreVersion = Version.parse(versionStatus.storeVersion);
+    Version installedVersion;
+
+    if (platform == TargetPlatform.iOS) {
+      installedVersion = Version.parse(versionStatus.localVersion);
+    } else if (platform == TargetPlatform.android) {
+      String localVersion = versionStatus.localVersion;
+
+      if (localVersion.endsWith('.debug')) {
+        localVersion = localVersion.replaceAll('.debug', '').trim();
+      }
+
+      installedVersion = Version.parse(localVersion);
+    }
+
+    versionStatus.canUpdate = appStoreVersion > installedVersion;
+
     return versionStatus;
   }
 
@@ -114,46 +136,38 @@ class NewVersion {
     return versionStatus;
   }
 
-  /// Shows the user a platform-specific alert about the app update. The user
-  /// can dismiss the alert or proceed to the app store.
+  /// Shows the user a platform-specific alert about the app update.
+  /// Force update dialog is shown and proceeds to the app store.
   void showUpdateDialog(VersionStatus versionStatus) async {
-    const title = Text('Update Available');
+    const title = Text('Update Required');
     final content = Text(
-        'You can now update this app from ${versionStatus.localVersion} to ${versionStatus.storeVersion}');
-    const dismissText = Text('Maybe Later');
-    final dismissAction = () => Navigator.pop(context);
+        "New app version (v${versionStatus.storeVersion}) available on store, please update to continue.");
     const updateText = Text('Update');
-    final updateAction = () {
-      _launchAppStore(versionStatus.appStoreLink);
-      Navigator.pop(context);
-    };
+    final updateAction = () => _launchAppStore(versionStatus.appStoreLink);
+
     final platform = Theme.of(context).platform;
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (BuildContext context) {
         return platform == TargetPlatform.android
-            ? AlertDialog(
-                title: title,
-                content: content,
-                actions: <Widget>[
-                  FlatButton(
-                    child: dismissText,
-                    onPressed: dismissAction,
-                  ),
-                  FlatButton(
-                    child: updateText,
-                    onPressed: updateAction,
-                  ),
-                ],
+            ? WillPopScope(
+                onWillPop: () async => false,
+                child: AlertDialog(
+                  title: title,
+                  content: content,
+                  actions: <Widget>[
+                    FlatButton(
+                      child: updateText,
+                      onPressed: updateAction,
+                    ),
+                  ],
+                ),
               )
             : CupertinoAlertDialog(
                 title: title,
                 content: content,
                 actions: <Widget>[
-                  CupertinoDialogAction(
-                    child: dismissText,
-                    onPressed: dismissAction,
-                  ),
                   CupertinoDialogAction(
                     child: updateText,
                     onPressed: updateAction,
@@ -166,6 +180,14 @@ class NewVersion {
 
   /// Launches the Apple App Store or Google Play Store page for the app.
   void _launchAppStore(String appStoreLink) async {
+    if (androidId.isNotEmpty &&
+        androidId != null &&
+        iOSId.isNotEmpty &&
+        iOSId != null) {
+      StoreRedirect.redirect(androidAppId: androidId, iOSAppId: iOSId);
+      return;
+    }
+
     if (await canLaunch(appStoreLink)) {
       await launch(appStoreLink, forceWebView: true);
     } else {
@@ -173,3 +195,4 @@ class NewVersion {
     }
   }
 }
+
